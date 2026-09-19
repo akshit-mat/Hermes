@@ -1,19 +1,43 @@
 model:
   vocab_size: 16000
-  context_length: 256
+  context_length: 320
   d_model: 384
   n_layers: 6
   n_heads: 6
   dropout: 0.0
 
+tokenizer:
+  vocab_size: 16000
+  special_tokens:
+    - "<pad>"
+    - "<unk>"
+    - "<bos>"
+    - "<eos>"
+  training_data: "data/processed_180m_rebuild/train.jsonl"
+  output_path: "artifacts/tokenizer_final/tokenizer.json"
+
+tokenized_data:
+  tokenizer_path: "artifacts/tokenizer_final/tokenizer.json"
+  input_dir: "data/processed_180m_rebuild"
+  output_dir: "data/tokenized_final"
+  statistics_path: "results/token_length_statistics_final.json"
+
 training:
   batch_size: 8
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 1
   learning_rate: 0.0003
   weight_decay: 0.1
   warmup_steps: 500
   max_steps: 10000
-  grad_clip: 1.0
+  gradient_clip_norm: 1.0
+  use_mixed_precision: true
+  validation_interval: 100
+  log_interval: 10
+  checkpoint_path: "experiments/run_day9/checkpoint.pt"
+  checkpoint_interval: 500
+  resume_from: null
+  seed: 42
+  device: "auto"
 
 data:
   seed: 42
@@ -36,6 +60,8 @@ data:
       language: "en"
     hindi:
       dataset: "wikimedia/wikipedia"
+      dump_date: "20260901"
+      dump_url: "https://dumps.wikimedia.org/hiwiki/20260901/hiwiki-20260901-pages-articles.xml.bz2"
       config_candidates:
         - "20231101.hi"
         - "20220301.hi"
@@ -52,3 +78,4 @@ data:
 
 logging:
   use_wandb: true
+  project: hermes
