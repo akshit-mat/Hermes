@@ -74,7 +74,7 @@ Hermes v1 uses three deliberately chosen, reproducible sources rather than a cus
 |---|---|---|
 | English | Hugging Face `wikimedia/wikipedia` (`en`) | Clean, deterministic, easy to slice to a fixed token budget |
 | Hindi (Devanagari) | Hugging Face `wikimedia/wikipedia` (`hi`) | Same rationale as English |
-| Hinglish (code-mixed) | `l3cube-pune/hing-corpus` (L3Cube-HingCorpus) | Twitter-derived Hindi-English Roman-script code-mixed corpus; a standard, well-documented choice for code-mixed text |
+| Hinglish (code-mixed) | `l3cube-pune/code-mixed-nlp` (L3Cube-HingCorpus) | Official L3Cube repo and Google Drive corpus artifact; Twitter-derived Hindi-English Roman-script code-mixed corpus |
 
 **Corpus size (final):** 60M tokens each for English, Hindi, and Hinglish — **180M tokens total**. This is a deliberate sampling target, not a natural language distribution: all three sources (Wikipedia English, Wikipedia Hindi, L3Cube-HingCorpus) contain far more raw text than this, so the limiting factor is the training compute budget below, not data availability. 60M tokens per category is small enough to fit inside a single weekly free-GPU quota for a full epoch, with room left for multiple epochs or reruns in the same week (see [Hardware](#hardware)).
 

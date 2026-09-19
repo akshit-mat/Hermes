@@ -17,6 +17,38 @@ training:
 
 data:
   seed: 42
+  target_tokens_per_category: 60000000
+  min_text_length: 4
+  max_text_length: 50000
+  train_ratio: 0.90
+  validation_ratio: 0.05
+  test_ratio: 0.05
+  output_dir: data/processed
+  debug:
+    max_examples_per_language: 200
+  sources:
+    english:
+      dataset: "wikimedia/wikipedia"
+      config_candidates:
+        - "20231101.en"
+        - "20220301.en"
+        - "20210101.en"
+      language: "en"
+    hindi:
+      dataset: "wikimedia/wikipedia"
+      config_candidates:
+        - "20231101.hi"
+        - "20220301.hi"
+        - "20210101.hi"
+      language: "hi"
+    hinglish:
+      source_name: "L3Cube-HingCorpus"
+      source_url: "https://github.com/l3cube-pune/code-mixed-nlp"
+      local_path: null
+      language: "hinglish"
+  sampling:
+    max_examples_per_language: null
+    deterministic_seed: true
 
 logging:
   use_wandb: true
