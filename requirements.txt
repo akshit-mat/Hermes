@@ -1,0 +1,8 @@
+torch
+tokenizers
+datasets
+pyyaml
+numpy
+tqdm
+wandb
+gradio

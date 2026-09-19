@@ -1,0 +1,41 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Experiment outputs
+wandb/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Local data
+data/raw/
+data/cleaned/
+data/processed/
+data/debug_check/
+tmp_hinglish_artifact.zip

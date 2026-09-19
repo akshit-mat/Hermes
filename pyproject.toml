@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes"
+version = "0.1.0"
+description = "A small multilingual decoder-only Transformer language model"
+requires-python = ">=3.11"
+dependencies = [
+    "torch",
+    "tokenizers",
+    "datasets",
+    "pyyaml",
+    "numpy",
+    "tqdm",
+    "wandb",
+    "gradio",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
