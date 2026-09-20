@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import bz2
 import os
 import random
 import tarfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 from urllib import error, request
@@ -18,6 +20,10 @@ WIKIPEDIA_LANGUAGE_MAP = {
     "en": ["20231101.en", "20220301.en", "20210101.en"],
     "hi": ["20231101.hi", "20220301.hi", "20210101.hi"],
 }
+HINDI_WIKIMEDIA_DUMP_URL = (
+    "https://dumps.wikimedia.org/hiwiki/20260901/"
+    "hiwiki-20260901-pages-articles.xml.bz2"
+)
 L3CUBE_HINGCORPUS_SOURCE_URL = "https://github.com/l3cube-pune/code-mixed-nlp"
 L3CUBE_HINGCORPUS_GDRIVE_URL = "https://drive.google.com/file/d/1s_6eHO9zDhxQ-xVN1TyNguszV1meZkl9/view"
 
@@ -42,38 +48,47 @@ def _iter_jsonl_from_archive(path: str | Path) -> Iterator[dict[str, Any]]:
         yield from _iter_local_jsonl(dataset_path)
         return
 
-    expected_member = "R11_final_data/concatenated_train_final_shuffled.txt"
-    found_member = False
+    expected_members = (
+        "R11_final_data/concatenated_train_final_shuffled.txt",
+        "R11_final_data/concatenated_validation.txt",
+    )
+    found_members: set[str] = set()
     try:
         with dataset_path.open("rb") as archive_handle:
             with tarfile.open(fileobj=archive_handle, mode="r|gz") as archive:
                 for member in archive:
-                    if member.name != expected_member:
+                    if member.name not in expected_members:
                         continue
-                    found_member = True
+                    found_members.add(member.name)
                     if not member.isfile():
                         raise ValueError(
-                            f"Expected Hinglish archive member is not a regular file: {expected_member}"
+                            f"Expected Hinglish archive member is not a regular file: {member.name}"
                         )
                     extracted = archive.extractfile(member)
                     if extracted is None:
                         raise ValueError(
-                            f"Could not read expected Hinglish archive member: {expected_member}"
+                            f"Could not read expected Hinglish archive member: {member.name}"
                         )
                     with extracted:
-                        for raw_line in extracted:
-                            text = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-                            if text:
-                                yield {"text": text, "language": "hinglish"}
-                    break
+                        try:
+                            for raw_line in extracted:
+                                text = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                                if text:
+                                    yield {"text": text, "language": "hinglish"}
+                        except (EOFError, tarfile.ReadError) as exc:
+                            raise ValueError(
+                                "Hinglish source archive is truncated while reading "
+                                f"{member.name}: {dataset_path}"
+                            ) from exc
     except tarfile.ReadError as exc:
         raise ValueError(
             f"Hinglish source is not a valid GZIP-compressed TAR archive: {dataset_path}"
         ) from exc
 
-    if not found_member:
+    missing_members = [member for member in expected_members if member not in found_members]
+    if missing_members:
         raise ValueError(
-            f"Expected Hinglish archive member is missing: {expected_member} in {dataset_path}"
+            f"Expected Hinglish archive member is missing: {', '.join(missing_members)} in {dataset_path}"
         )
 
 
@@ -128,6 +143,51 @@ def _iter_wikipedia_dataset(language: str, *, dataset_name: str = "wikimedia/wik
         normalized = text.strip()
         if normalized:
             yield {"text": normalized, "language": language}
+
+
+def _iter_wikimedia_dump(source: str | Path, *, language: str) -> Iterator[dict[str, Any]]:
+    """Stream current-article text from an official Wikimedia XML dump."""
+    source_value = str(source)
+    response = None
+    raw_stream: Any
+    if source_value.startswith(("http://", "https://")):
+        response = request.urlopen(
+            request.Request(source_value, headers={"User-Agent": "Hermes/1.0"}),
+            timeout=60,
+        )
+        raw_stream = response
+    else:
+        raw_stream = Path(source_value).open("rb")
+
+    compressed_stream = bz2.BZ2File(raw_stream)
+    try:
+        for _, page in ET.iterparse(compressed_stream, events=("end",)):
+            if page.tag.rsplit("}", 1)[-1] != "page":
+                continue
+            namespace = next(
+                (child.text for child in page if child.tag.rsplit("}", 1)[-1] == "ns"),
+                None,
+            )
+            if namespace == "0":
+                revision = next(
+                    (child for child in page if child.tag.rsplit("}", 1)[-1] == "revision"),
+                    None,
+                )
+                text_node = None
+                if revision is not None:
+                    text_node = next(
+                        (child for child in revision if child.tag.rsplit("}", 1)[-1] == "text"),
+                        None,
+                    )
+                if text_node is not None and isinstance(text_node.text, str) and text_node.text.strip():
+                    yield {"text": text_node.text.strip(), "language": language}
+            page.clear()
+    finally:
+        compressed_stream.close()
+        if response is not None:
+            response.close()
+        elif hasattr(raw_stream, "close"):
+            raw_stream.close()
 
 
 def _load_wikipedia_with_fallback(language: str, *, max_examples: int | None = None, seed: int = 42) -> Iterator[dict[str, Any]]:
@@ -226,6 +286,13 @@ def _load_hinglish_source(hinglish_source_path: str | Path | None = None, *, max
 def download_wikipedia(language: str, *, max_examples: int | None = None, seed: int = 42, source_path: str | Path | None = None) -> Iterator[dict[str, Any]]:
     """Stream English or Hindi Wikipedia examples without materializing the full source in RAM."""
     if source_path is not None:
+        if str(source_path).startswith(("http://", "https://")) or str(source_path).lower().endswith((".bz2", ".xml")):
+            yield from _sample_stream(
+                _iter_wikimedia_dump(source_path, language=language),
+                max_examples=max_examples,
+                seed=seed,
+            )
+            return
         yield from _sample_stream(_iter_local_jsonl(source_path), max_examples=max_examples, seed=seed)
         return
     yield from _load_wikipedia_with_fallback(language, max_examples=max_examples, seed=seed)
@@ -251,6 +318,7 @@ def download_source_records(language: str, *, max_examples: int | None = None, s
 
 
 __all__ = [
+    "HINDI_WIKIMEDIA_DUMP_URL",
     "L3CUBE_HINGCORPUS_SOURCE_URL",
     "download_hinglish",
     "download_source_records",

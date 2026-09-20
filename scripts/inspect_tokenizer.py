@@ -20,8 +20,8 @@ from hermes.tokenizer.tokenizer import HermesTokenizer
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect tokenization using train-split examples only.")
-    parser.add_argument("--tokenizer", default="artifacts/tokenizer/tokenizer.json")
-    parser.add_argument("--train-data", default="data/processed/train.jsonl")
+    parser.add_argument("--tokenizer", default="artifacts/tokenizer_final/tokenizer.json")
+    parser.add_argument("--train-data", default="data/processed_180m_rebuild/train.jsonl")
     parser.add_argument("--output", default="results/tokenization_inspection.txt")
     args = parser.parse_args()
 

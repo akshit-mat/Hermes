@@ -1,6 +1,8 @@
 import io
+import bz2
 import json
 import tarfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -8,11 +10,12 @@ import pytest
 from hermes.data.dataset import (load_processed_dataset, save_processed_dataset,
                                  save_metadata)
 from hermes.data.download import (download_hinglish, get_hinglish_source_access_method,
-                                  _iter_jsonl_from_archive, _sample_stream)
+                                  _iter_jsonl_from_archive, _iter_wikimedia_dump,
+                                  _sample_stream, HINDI_WIKIMEDIA_DUMP_URL)
 from hermes.data.preprocess import (deduplicate_examples, filter_examples,
                                    normalize_text)
 from hermes.data.splits import split_records
-from scripts.prepare_data import _assign_record_to_split, _write_jsonl_record, prepare_data
+from scripts.prepare_data import _assign_record_to_split, _write_jsonl_record, load_config, prepare_data
 
 
 @pytest.mark.parametrize(
@@ -135,6 +138,31 @@ def test_seeded_sampling_is_deterministic():
     assert len(first) == 10
 
 
+def test_hindi_wikimedia_dump_stream_preserves_text_and_devanagari(tmp_path):
+    dump_path = tmp_path / "hiwiki-pages-articles.xml.bz2"
+    root = ET.Element("mediawiki")
+    for namespace, text in [("0", "नमस्ते दुनिया यह हिंदी लेख है"), ("1", "शीर्षक")]:
+        page = ET.SubElement(root, "page")
+        ET.SubElement(page, "ns").text = namespace
+        revision = ET.SubElement(page, "revision")
+        ET.SubElement(revision, "text").text = text
+    payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    dump_path.write_bytes(bz2.compress(payload))
+
+    records = list(_iter_wikimedia_dump(dump_path, language="hi"))
+
+    assert records == [{"text": "नमस्ते दुनिया यह हिंदी लेख है", "language": "hi"}]
+    assert HINDI_WIKIMEDIA_DUMP_URL.endswith("hiwiki-20260901-pages-articles.xml.bz2")
+
+
+def test_base_config_resolves_verified_hindi_wikimedia_dump():
+    hindi = load_config("configs/base.yaml")["data"]["sources"]["hindi"]
+
+    assert hindi["language"] == "hi"
+    assert hindi["dump_date"] == "20260901"
+    assert hindi["dump_url"] == HINDI_WIKIMEDIA_DUMP_URL
+
+
 def test_filtering_keeps_normal_text_and_rejects_url_html_garbage():
     retained = [
         "This is a normal English sentence.",
@@ -198,14 +226,34 @@ def test_hinglish_local_source_and_upstream_failure_paths(tmp_path, monkeypatch)
 
 
 def test_hinglish_tar_gz_archive_source(tmp_path):
-    archive_path = tmp_path / "hinglish_artifact.zip"
-    member_name = "R11_final_data/concatenated_train_final_shuffled.txt"
-    lines = [
+    archive_path = tmp_path / "dummy_hinglish_archive.zip"
+    train_member_name = "R11_final_data/concatenated_train_final_shuffled.txt"
+    validation_member_name = "R11_final_data/concatenated_validation.txt"
+    train_lines = [
         "kal movie dekhne chale?",
         "yeh awesome hai",
         "aaj weather bahut hot hai",
     ]
-    payload = ("\n".join(lines) + "\n").encode("utf-8")
+    validation_lines = ["validation Hinglish record"]
+
+    with archive_path.open("wb") as handle:
+        with tarfile.open(fileobj=handle, mode="w:gz") as archive:
+            for member_name, lines in ((train_member_name, train_lines), (validation_member_name, validation_lines)):
+                payload = ("\n".join(lines) + "\n").encode("utf-8")
+                member = tarfile.TarInfo(member_name)
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+
+    records = list(_iter_jsonl_from_archive(archive_path))
+
+    assert [record["text"] for record in records] == train_lines + validation_lines
+    assert [record["language"] for record in records] == ["hinglish"] * len(records)
+
+
+def test_hinglish_truncated_archive_fails_closed(tmp_path):
+    archive_path = tmp_path / "dummy_truncated_archive.tar.gz"
+    member_name = "R11_final_data/concatenated_train_final_shuffled.txt"
+    payload = (b"kal movie dekhne chale? this is a longer Hinglish record.\n" * 1000)
 
     with archive_path.open("wb") as handle:
         with tarfile.open(fileobj=handle, mode="w:gz") as archive:
@@ -213,10 +261,11 @@ def test_hinglish_tar_gz_archive_source(tmp_path):
             member.size = len(payload)
             archive.addfile(member, io.BytesIO(payload))
 
-    records = list(_iter_jsonl_from_archive(archive_path))
+    archive_bytes = archive_path.read_bytes()
+    archive_path.write_bytes(archive_bytes[: len(archive_bytes) // 2])
 
-    assert [record["text"] for record in records] == lines
-    assert [record["language"] for record in records] == ["hinglish"] * len(lines)
+    with pytest.raises(ValueError, match="archive is truncated"):
+        list(_iter_jsonl_from_archive(archive_path))
 
 
 def test_prepare_data_streams_incrementally_without_buffering(tmp_path, monkeypatch):

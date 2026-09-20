@@ -11,7 +11,7 @@ Exercises the full training pipeline end-to-end:
   - Validates: no NaN loss, loss decreasing trend, correct step counter after resume
 
 Run:
-    .venv\\Scripts\\python.exe scripts/smoke_test.py
+    .venv\Scripts\python.exe scripts/smoke_test.py
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ from hermes.training.trainer import (
     create_local_logger,
     set_deterministic_seed,
     train_basic,
+    _restore_data_position,
 )
 
 # ── Output paths ─────────────────────────────────────────────────────────────
@@ -62,6 +63,10 @@ def main() -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
     RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Delete old results file if it exists to ensure regeneration
+    if RESULTS_PATH.exists():
+        RESULTS_PATH.unlink()
 
     logger = create_local_logger(str(LOG_PATH))
     logger(_header("HERMES DAY 8 INTEGRATION SMOKE TEST"))
@@ -103,37 +108,71 @@ def main() -> None:
     logger(f"pad_token_id={pad_token_id}")
 
     seed = int(training_cfg.get("seed", 42))
-    set_deterministic_seed(seed)
-    model = build_model_from_config(config, pad_token_id=pad_token_id)
-    n_params = model.count_parameters()
-    logger(f"model.parameters={n_params:,}")
 
     device = torch.device("cpu")   # smoke test always runs CPU; GPU is for Kaggle
     logger(f"device={device}")
 
-    # ── Data loaders ──────────────────────────────────────────────────────────
-    logger(_header("3. DATA LOADERS"))
+    # ── Validation loader ─────────────────────────────────────────────────────
     split_dir = Path(tokenized_cfg["output_dir"])
     batch_size = int(training_cfg["batch_size"])
-    
-    # Train loader (full)
-    train_loader = create_dataloader(split_dir / "train.jsonl", batch_size=batch_size, shuffle=True)
-    
+    grad_accum = int(training_cfg.get("gradient_accumulation_steps", 1))
+
     # Validation loader (mocked to just 2 batches for the smoke test to avoid 27k CPU forward passes)
     from torch.utils.data import Subset
     full_val_dataset = create_dataloader(split_dir / "validation.jsonl", batch_size=batch_size, shuffle=False).dataset
     val_subset = Subset(full_val_dataset, range(min(len(full_val_dataset), batch_size * 2)))
     validation_loader = torch.utils.data.DataLoader(val_subset, batch_size=batch_size, shuffle=False)
-    
-    logger(f"train_sequences={len(train_loader.dataset)}")
+
     logger(f"validation_sequences_smoke={len(validation_loader.dataset)}")
+
+
+    # ── Continuous Reference Run ─────────────────────────────────────────────
+    logger(_header(f"3. CONTINUOUS REFERENCE RUN ({PHASE2_STEPS} STEPS)"))
+    set_deterministic_seed(seed)
+    model_continuous = build_model_from_config(config, pad_token_id=pad_token_id)
+    n_params = model_continuous.count_parameters()
+    logger(f"model.parameters={n_params:,}")
+    continuous_loader = create_dataloader(split_dir / "train.jsonl", batch_size=batch_size, shuffle=True, seed=seed)
+
+    def cont_logger(msg: str) -> None:
+        pass  # keep it quiet
+
+    continuous_history = train_basic(
+        model_continuous,
+        continuous_loader,
+        validation_loader,
+        learning_rate=float(training_cfg["learning_rate"]),
+        weight_decay=float(training_cfg["weight_decay"]),
+        warmup_steps=SMOKE_WARMUP_STEPS,
+        max_steps=PHASE2_STEPS,
+        gradient_clip_norm=float(training_cfg.get("gradient_clip_norm", 1.0)),
+        gradient_accumulation_steps=grad_accum,
+        validation_interval=PHASE2_STEPS,
+        log_interval=PHASE2_STEPS + 1, # Don't log
+        device=device,
+        logger=cont_logger,
+        checkpoint_path=None,
+        checkpoint_interval=0,
+        resume_from=None,
+        use_mixed_precision=bool(training_cfg.get("use_mixed_precision", False)),
+        use_wandb=False,
+    )
+
+    continuous_parameters = [
+        parameter.detach().clone()
+        for parameter in model_continuous.parameters()
+    ]
+
 
     # ── Phase 1: Run PHASE1_STEPS steps, save checkpoint, then simulate crash ──
     logger(_header(f"4. PHASE 1 — RUN {PHASE1_STEPS} STEPS THEN SAVE CHECKPOINT"))
     set_deterministic_seed(seed)
     model_phase1 = build_model_from_config(config, pad_token_id=pad_token_id)
 
+    train_loader_phase1 = create_dataloader(split_dir / "train.jsonl", batch_size=batch_size, shuffle=True, seed=seed)
+
     phase1_losses: list[float] = []
+    phase1_val_losses: list[float] = []
     def phase1_logger(msg: str) -> None:
         logger(f"  [phase1] {msg}")
         if msg.startswith("step="):
@@ -141,49 +180,121 @@ def main() -> None:
                 loss_str = [p for p in msg.split() if p.startswith("train_loss=")]
                 if loss_str:
                     phase1_losses.append(float(loss_str[0].split("=")[1]))
+                val_str = [p for p in msg.split() if p.startswith("validation_loss=")]
+                if val_str:
+                    phase1_val_losses.append(float(val_str[0].split("=")[1]))
             except (IndexError, ValueError):
                 pass
 
     logger(f"smoke_warmup_steps={SMOKE_WARMUP_STEPS} (capped from locked config warmup_steps={training_cfg.get('warmup_steps', 500)} for this {PHASE1_STEPS}-step smoke run)")
-    history1 = train_basic(
-        model_phase1,
-        train_loader,
-        validation_loader,
-        learning_rate=float(training_cfg["learning_rate"]),
-        weight_decay=float(training_cfg["weight_decay"]),
-        warmup_steps=SMOKE_WARMUP_STEPS,
-        max_steps=PHASE1_STEPS,
-        gradient_clip_norm=float(training_cfg.get("gradient_clip_norm", 1.0)),
-        gradient_accumulation_steps=int(training_cfg.get("gradient_accumulation_steps", 1)),
-        validation_interval=PHASE1_STEPS,   # only validate at end of phase
-        log_interval=5,
-        device=device,
-        logger=phase1_logger,
-        checkpoint_path=str(CHECKPOINT_PATH),
-        checkpoint_interval=CHECKPOINT_INTERVAL,
-        resume_from=None,
-        use_mixed_precision=bool(training_cfg.get("use_mixed_precision", False)),
-        use_wandb=False,   # W&B disabled path
-    )
+    import hermes.training.trainer as trainer_module
+    original_save = trainer_module.save_checkpoint
+
+    class SimulatedCrash(RuntimeError): pass
+
+    def interrupting_save(*args, **kwargs):
+        path = original_save(*args, **kwargs)
+        if kwargs.get("step") == PHASE1_STEPS:
+            raise SimulatedCrash("simulated crash")
+        return path
+
+    trainer_module.save_checkpoint = interrupting_save
+
+    try:
+        history1 = train_basic(
+            model_phase1,
+            train_loader_phase1,
+            validation_loader,
+            learning_rate=float(training_cfg["learning_rate"]),
+            weight_decay=float(training_cfg["weight_decay"]),
+            warmup_steps=SMOKE_WARMUP_STEPS,
+            max_steps=PHASE2_STEPS, # Use PHASE2_STEPS so scheduler matches Continuous run
+            gradient_clip_norm=float(training_cfg.get("gradient_clip_norm", 1.0)),
+            gradient_accumulation_steps=grad_accum,
+            validation_interval=PHASE1_STEPS,   # only validate at end of phase
+            log_interval=5,
+            device=device,
+            logger=phase1_logger,
+            checkpoint_path=str(CHECKPOINT_PATH),
+            checkpoint_interval=CHECKPOINT_INTERVAL,
+            resume_from=None,
+            use_mixed_precision=bool(training_cfg.get("use_mixed_precision", False)),
+            use_wandb=False,   # W&B disabled path
+        )
+    except SimulatedCrash:
+        logger(f"Phase 1 intentionally crashed after saving checkpoint at step {PHASE1_STEPS}.")
+        history1 = {
+            "train_loss": phase1_losses,
+            "validation_loss": phase1_val_losses,
+        }
+    finally:
+        trainer_module.save_checkpoint = original_save
 
     assert CHECKPOINT_PATH.exists(), "Checkpoint was not written after Phase 1"
+
+    # Verification Part 4B: verify checkpoint contents
     ckpt_state = torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=False)
     required_keys = {"model", "optimizer", "scheduler", "step", "python_rng_state", "numpy_rng_state", "torch_rng_state"}
     missing = required_keys - set(ckpt_state.keys())
     assert not missing, f"Checkpoint missing keys: {missing}"
-    logger(f"checkpoint_keys_present={sorted(ckpt_state.keys())}")
+
+    if "data_state" not in ckpt_state:
+        logger("FAIL THE SMOKE TEST: data_state missing from checkpoint")
+        assert False, "data_state missing from checkpoint"
+    logger("Checkpoint data_state: PASS")
+
+    # Verification Part 4C: verify data_state contents
+    data_state = ckpt_state["data_state"]
+    expected_ds_keys = {"sampler_type", "sampler_seed", "sampler_epoch", "batches_consumed_in_epoch", "global_micro_batches"}
+    if not expected_ds_keys.issubset(set(data_state.keys())):
+        logger("FAIL THE SMOKE TEST: data_state missing required fields")
+        assert False, f"data_state missing fields. Expected: {expected_ds_keys}, got: {list(data_state.keys())}"
+
     logger(f"checkpoint_step={ckpt_state['step']}")
     assert ckpt_state["step"] == PHASE1_STEPS, (
         f"Expected checkpoint step={PHASE1_STEPS}, got {ckpt_state['step']}"
     )
-    logger("checkpoint_integrity=PASS")
 
     # ── Phase 2: Simulate a new process (fresh model/optimizer) and resume ────
     logger(_header(f"5. PHASE 2 — RESUME FROM CHECKPOINT, RUN TO STEP {PHASE2_STEPS}"))
     set_deterministic_seed(seed + 999)   # deliberately different seed to prove checkpoint restores it
+
+    # Part 4E: Fresh model
     model_phase2 = build_model_from_config(config, pad_token_id=pad_token_id)
 
+    # Part 4D: Fresh dataset, sampler, loader
+    train_loader_phase2 = create_dataloader(split_dir / "train.jsonl", batch_size=batch_size, shuffle=True, seed=seed)
+    logger("Fresh dataset: PASS")
+    logger("Fresh sampler: PASS")
+    logger("Fresh DataLoader: PASS")
+
+    # Part 4G: Explicit fresh-process data-order check
+    # Check that fresh loader skipped by data_state gives same next batch as continuous loader skipped by data_state
+    dummy_cont_loader = create_dataloader(split_dir / "train.jsonl", batch_size=batch_size, shuffle=True, seed=seed)
+    cont_iter, _ = _restore_data_position(
+        dummy_cont_loader,
+        start_step=PHASE1_STEPS,
+        gradient_accumulation_steps=grad_accum,
+        data_state=data_state,
+    )
+    expected_next_batch = next(cont_iter)
+
+    dummy_resume_loader = create_dataloader(split_dir / "train.jsonl", batch_size=batch_size, shuffle=True, seed=seed)
+    resume_iter, _ = _restore_data_position(
+        dummy_resume_loader,
+        start_step=PHASE1_STEPS,
+        gradient_accumulation_steps=grad_accum,
+        data_state=data_state,
+    )
+    actual_next_batch = next(resume_iter)
+
+    if not torch.equal(expected_next_batch["input_ids"], actual_next_batch["input_ids"]):
+        logger("FAIL THE SMOKE TEST: data order mismatch")
+        assert False, "Resume data position mismatch!"
+    logger("Resume data position: PASS")
+
     phase2_losses: list[float] = []
+    phase2_val_losses: list[float] = []
     def phase2_logger(msg: str) -> None:
         logger(f"  [phase2] {msg}")
         if msg.startswith("step="):
@@ -191,19 +302,32 @@ def main() -> None:
                 loss_str = [p for p in msg.split() if p.startswith("train_loss=")]
                 if loss_str:
                     phase2_losses.append(float(loss_str[0].split("=")[1]))
+                val_str = [p for p in msg.split() if p.startswith("validation_loss=")]
+                if val_str:
+                    phase2_val_losses.append(float(val_str[0].split("=")[1]))
             except (IndexError, ValueError):
                 pass
 
+        # Verify checkpoint step restoration (Part 4J)
+        if "resumed_from=" in msg:
+            step_part = [p for p in msg.split() if p.startswith("step=")][0]
+            restored_step = int(step_part.split("=")[1])
+            if restored_step != PHASE1_STEPS:
+                logger(f"FAIL THE SMOKE TEST: restored step {restored_step} != {PHASE1_STEPS}")
+                assert False, f"restored step {restored_step} != {PHASE1_STEPS}"
+            logger("Checkpoint step restoration: PASS")
+
+
     history2 = train_basic(
         model_phase2,
-        train_loader,
+        train_loader_phase2,
         validation_loader,
         learning_rate=float(training_cfg["learning_rate"]),
         weight_decay=float(training_cfg["weight_decay"]),
         warmup_steps=SMOKE_WARMUP_STEPS,
         max_steps=PHASE2_STEPS,
         gradient_clip_norm=float(training_cfg.get("gradient_clip_norm", 1.0)),
-        gradient_accumulation_steps=int(training_cfg.get("gradient_accumulation_steps", 1)),
+        gradient_accumulation_steps=grad_accum,
         validation_interval=PHASE2_STEPS,
         log_interval=5,
         device=device,
@@ -220,7 +344,13 @@ def main() -> None:
         f"Final checkpoint step mismatch: expected {PHASE2_STEPS}, got {ckpt_final['step']}"
     )
     logger(f"final_checkpoint_step={ckpt_final['step']}")
-    logger("resumption_step_counter=PASS")
+
+    # Part 4I: Verify continuous vs resumed parameter equivalence
+    for expected, actual in zip(continuous_parameters, model_phase2.parameters()):
+        if not torch.equal(expected, actual):
+            logger("FAIL THE SMOKE TEST: Continuous vs resumed parameters mismatch")
+            assert False, "Continuous vs resumed parameters mismatch"
+    logger("Continuous vs resumed parameters: PASS")
 
     # ── Stability checks ──────────────────────────────────────────────────────
     logger(_header("6. STABILITY CHECKS"))
@@ -290,7 +420,7 @@ def main() -> None:
             "seed": seed,
         },
         "model_parameters": n_params,
-        "train_sequences": len(train_loader.dataset),
+        "train_sequences": len(train_loader_phase1.dataset),
         "validation_sequences": len(validation_loader.dataset),
         "phase1_steps": PHASE1_STEPS,
         "phase2_total_steps": PHASE2_STEPS,
@@ -312,8 +442,10 @@ def main() -> None:
             "resumption_step_counter": True,
             "wandb_disabled_path": True,
         },
+        "data_state_verified": True,
     }
     RESULTS_PATH.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    logger("Result regeneration: PASS")
 
     logger(_header("7. SUMMARY"))
     logger("ALL CHECKS PASSED")

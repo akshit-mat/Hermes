@@ -5,7 +5,7 @@ from hermes.model.model import HermesModel
 
 def make_model() -> HermesModel:
 	return HermesModel(
-		vocab_size=597,
+		vocab_size=16000,
 		context_length=320,
 		d_model=384,
 		n_layers=6,
@@ -16,12 +16,12 @@ def make_model() -> HermesModel:
 
 def test_full_model_forward_shape_and_finite_loss():
 	model = make_model()
-	input_ids = torch.randint(4, 597, (2, 16))
+	input_ids = torch.randint(4, 16000, (2, 16))
 	input_ids[:, -2:] = 0
 	logits = model(input_ids)
 	loss = model.compute_loss(logits, input_ids)
 	assert len(model.blocks) == 6
-	assert logits.shape == (2, 16, 597)
+	assert logits.shape == (2, 16, 16000)
 	assert loss.ndim == 0
 	assert torch.isfinite(loss)
 

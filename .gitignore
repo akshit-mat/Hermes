@@ -1,41 +1,46 @@
-# Virtual environments
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
 .venv/
 venv/
 env/
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
-
-# Testing / coverage
-.pytest_cache/
-.coverage
-htmlcov/
-
-# IDEs
+# IDE / OS
 .vscode/
 .idea/
-
-# OS files
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
 
-# Experiment outputs
+# Local/generated datasets
+data/
+
+# Generated model/tokenizer artifacts
+artifacts/
+
+# Generated experiment results
+results/
+
+# Temporary files/directories
+tmp/
+tmp_*/
+temp/
+temp_*/
+
+# Logs
+*.log
+logs/
+
+# W&B/local experiment output
 wandb/
-checkpoints/
+
+# Common model/checkpoint artifacts
+*.ckpt
+*.checkpoint
 *.pt
 *.pth
-*.ckpt
-
-# Local data
-data/raw/
-data/cleaned/
-data/processed/
-data/debug_check/
-tmp_hinglish_artifact.zip
+*.bin
+*.safetensors

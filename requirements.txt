@@ -1,8 +1,8 @@
-torch
-tokenizers
-datasets
-pyyaml
-numpy
-tqdm
-wandb
-gradio
+torch==2.14.0
+tokenizers==0.23.2
+datasets==5.0.1
+PyYAML==6.0.3
+numpy==2.4.6
+tqdm==4.70.1
+wandb==0.30.0
+gradio==6.27.0

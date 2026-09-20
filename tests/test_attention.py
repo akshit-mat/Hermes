@@ -37,9 +37,9 @@ def test_head_split_does_not_mix_head_channels():
 
 
 def test_embeddings_and_block_shapes_at_locked_dimensions():
-	token_embedding = TokenEmbedding(vocab_size=597, d_model=384)
+	token_embedding = TokenEmbedding(vocab_size=16000, d_model=384)
 	positional_embedding = PositionalEmbedding(context_length=320, d_model=384)
-	token_ids = torch.randint(0, 597, (2, 320))
+	token_ids = torch.randint(0, 16000, (2, 320))
 	embedded = token_embedding(token_ids)
 	positioned = positional_embedding(embedded)
 	block = TransformerBlock(d_model=384, n_heads=6, context_length=320)

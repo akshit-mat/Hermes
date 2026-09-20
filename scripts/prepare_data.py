@@ -72,7 +72,7 @@ def prepare_data(config_path: str | Path, output_dir: str | Path, *, seed: int =
 
     category_sources = {
         "en": {"dataset": "wikimedia/wikipedia", "language": "en", "source_id": english_source_cfg.get("dataset", "wikimedia/wikipedia"), "actual_source": english_source_cfg.get("local_path") or "wikimedia/wikipedia", "actual_source_path": english_source_cfg.get("local_path")},
-        "hi": {"dataset": "wikimedia/wikipedia", "language": "hi", "source_id": hindi_source_cfg.get("dataset", "wikimedia/wikipedia"), "actual_source": hindi_source_cfg.get("local_path") or "wikimedia/wikipedia", "actual_source_path": hindi_source_cfg.get("local_path")},
+        "hi": {"dataset": hindi_source_cfg.get("dataset", "wikimedia/wikipedia"), "language": "hi", "source_id": hindi_source_cfg.get("dump_url") or hindi_source_cfg.get("dataset", "wikimedia/wikipedia"), "actual_source": hindi_source_cfg.get("local_path") or hindi_source_cfg.get("dump_url") or "wikimedia/wikipedia", "actual_source_path": hindi_source_cfg.get("local_path") or hindi_source_cfg.get("dump_url"), "acquisition_method": "official Wikimedia XML dump streamed through bz2" if hindi_source_cfg.get("dump_url") else "Hugging Face streaming dataset"},
         "hinglish": {"dataset": "L3Cube-HingCorpus", "language": "hinglish", "source_id": hinglish_source_cfg.get("source_url", "https://github.com/l3cube-pune/code-mixed-nlp"), "actual_source": hinglish_actual_source_path if hinglish_actual_source_path else hinglish_source_cfg.get("source_url"), "actual_source_path": hinglish_actual_source_path},
     }
 
@@ -102,10 +102,13 @@ def prepare_data(config_path: str | Path, output_dir: str | Path, *, seed: int =
             source_cfg = data_cfg.get("sources", {}).get(language_name, {})
             language = source_cfg.get("language", "en" if language_name == "english" else "hi" if language_name == "hindi" else "hinglish")
             local_path = source_cfg.get("local_path")
+            configured_source = local_path
+            if language == "hi" and not configured_source:
+                configured_source = source_cfg.get("dump_url")
             if max_examples is not None:
-                source_iter = download_source_records(language, max_examples=max_examples, seed=seed, source_path=local_path)
+                source_iter = download_source_records(language, max_examples=max_examples, seed=seed, source_path=configured_source)
             else:
-                source_iter = download_source_records(language, seed=seed, source_path=local_path)
+                source_iter = download_source_records(language, seed=seed, source_path=configured_source)
 
             for record in source_iter:
                 raw_examples_seen[language] += 1
@@ -147,7 +150,7 @@ def prepare_data(config_path: str | Path, output_dir: str | Path, *, seed: int =
         "source_category_details": category_sources,
         "source_identifiers": {
             "en": {"dataset": "wikimedia/wikipedia", "config_candidates": english_source_cfg.get("config_candidates", ["20231101.en", "20220301.en", "20210101.en"]), "actual_source": english_source_cfg.get("local_path") or "wikimedia/wikipedia", "actual_source_path": english_source_cfg.get("local_path")},
-            "hi": {"dataset": "wikimedia/wikipedia", "config_candidates": hindi_source_cfg.get("config_candidates", ["20231101.hi", "20220301.hi", "20210101.hi"]), "actual_source": hindi_source_cfg.get("local_path") or "wikimedia/wikipedia", "actual_source_path": hindi_source_cfg.get("local_path")},
+            "hi": {"dataset": hindi_source_cfg.get("dataset", "wikimedia/wikipedia"), "language": "hi", "dump_date": hindi_source_cfg.get("dump_date"), "dump_url": hindi_source_cfg.get("dump_url"), "config_candidates": hindi_source_cfg.get("config_candidates", ["20231101.hi", "20220301.hi", "20210101.hi"]), "actual_source": hindi_source_cfg.get("local_path") or hindi_source_cfg.get("dump_url") or "wikimedia/wikipedia", "actual_source_path": hindi_source_cfg.get("local_path") or hindi_source_cfg.get("dump_url"), "acquisition_method": "official Wikimedia XML dump streamed through bz2" if hindi_source_cfg.get("dump_url") else "Hugging Face streaming dataset"},
             "hinglish": {"dataset": "L3Cube-HingCorpus", "source_url": hinglish_source_cfg.get("source_url"), "local_fallback": hinglish_configured_local_path, "environment_source_path": hinglish_environment_path, "actual_source_path": hinglish_actual_source_path, "actual_source": hinglish_actual_source_path or hinglish_source_cfg.get("source_url")},
         },
         "seed": seed,
@@ -204,7 +207,7 @@ def prepare_data(config_path: str | Path, output_dir: str | Path, *, seed: int =
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare Hermes data for tokenizer training.")
     parser.add_argument("--config", default="configs/base.yaml", help="Path to the YAML config file.")
-    parser.add_argument("--output-dir", default="data/processed", help="Where processed JSONL files and metadata will be written.")
+    parser.add_argument("--output-dir", default="data/processed_180m_rebuild", help="Where processed JSONL files and metadata will be written.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed used for deterministic splitting.")
     parser.add_argument("--max-examples", type=int, default=None, help="Optional cap on examples per language for a smaller debug or sample run.")
     parser.add_argument("--debug", action="store_true", help="Generate a tiny deterministic debug subset instead of the full dataset.")

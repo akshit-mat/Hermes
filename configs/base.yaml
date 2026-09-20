@@ -47,7 +47,7 @@ data:
   train_ratio: 0.90
   validation_ratio: 0.05
   test_ratio: 0.05
-  output_dir: data/processed
+  output_dir: data/processed_180m_rebuild
   debug:
     max_examples_per_language: 200
   sources:
